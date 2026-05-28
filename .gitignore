@@ -1,0 +1,6 @@
+.env
+google-service-account.json
+node_modules/
+public/audio/
+public/audio.file-backup
+npm-debug.log*

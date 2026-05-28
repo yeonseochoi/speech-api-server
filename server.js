@@ -45,7 +45,9 @@ app.get("/", (req, res) => {
 });
 
 function getBaseUrl(req) {
-  return process.env.BASE_URL || `${req.protocol}://${req.get("host")}`;
+  const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get("host")}`;
+
+  return baseUrl.replace(/^http:\/\/(.+\.onrender\.com)$/i, "https://$1");
 }
 
 app.post("/generate-audio", async (req, res) => {

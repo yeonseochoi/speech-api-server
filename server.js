@@ -120,13 +120,25 @@ function getBaseUrl(req) {
 
 app.post("/generate-audio", async (req, res) => {
   try {
-    const {
-      place = "tour",
-      persona = "default",
-      tts_script = req.body.value,
-      voice = "ko-KR-Chirp3-HD-Charon",
-      speakingRate = 0.85
-    } = req.body;
+    let { place, persona, tts_script, voice, speakingRate } = req.body;
+
+    if (req.body.value) {
+      try {
+        const parsed = JSON.parse(req.body.value);
+        place        = parsed.place        || place;
+        persona      = parsed.persona      || persona;
+        tts_script   = parsed.tts_script   || req.body.value;
+        voice        = parsed.voice        || voice;
+        speakingRate = parsed.speakingRate || speakingRate;
+      } catch (e) {
+        tts_script = req.body.value;
+      }
+    }
+
+    place        = place        || "tour";
+    persona      = persona      || "default";
+    voice        = voice        || "ko-KR-Chirp3-HD-Charon";
+    speakingRate = speakingRate || 0.85;
 
     logEvent("info", "tts:received", {
       requestId: req.requestId,

@@ -11,7 +11,71 @@ const app = express();
 app.set("trust proxy", true);
 
 app.use(cors());
+
+function logEvent(level, event, details = {}) {
+  const payload = {
+    ts: new Date().toISOString(),
+    event,
+    ...details
+  };
+
+  const line = JSON.stringify(payload);
+  if (level === "error") {
+    console.error(line);
+  } else if (level === "warn") {
+    console.warn(line);
+  } else {
+    console.log(line);
+  }
+}
+
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+  req.requestId = crypto.randomUUID();
+
+  logEvent("info", "request:start", {
+    requestId: req.requestId,
+    method: req.method,
+    path: req.originalUrl,
+    ip: req.ip,
+    userAgent: req.get("user-agent"),
+    contentType: req.get("content-type"),
+    contentLength: req.get("content-length")
+  });
+
+  res.on("finish", () => {
+    logEvent("info", "request:finish", {
+      requestId: req.requestId,
+      method: req.method,
+      path: req.originalUrl,
+      statusCode: res.statusCode,
+      durationMs: Date.now() - startedAt
+    });
+  });
+
+  next();
+});
+
 app.use(express.json({ limit: "2mb" }));
+
+app.use((error, req, res, next) => {
+  if (error && error.type === "entity.parse.failed") {
+    logEvent("error", "request:json_parse_failed", {
+      requestId: req.requestId,
+      method: req.method,
+      path: req.originalUrl,
+      message: error.message
+    });
+
+    return res.status(400).json({
+      success: false,
+      error: "Invalid JSON body",
+      request_id: req.requestId
+    });
+  }
+
+  return next(error);
+});
 
 const audioDir = path.join(__dirname, "public", "audio");
 
@@ -21,6 +85,10 @@ function ensureAudioDir() {
   }
 
   fs.mkdirSync(audioDir, { recursive: true });
+}
+
+function toSafeFilePart(value) {
+  return String(value).replace(/[^\p{L}\p{N}-]/gu, "_");
 }
 
 ensureAudioDir();
@@ -34,7 +102,7 @@ if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
 
   client = new textToSpeech.TextToSpeechClient({
     credentials,
-    projectId: credentials.project_id,
+    projectId: credentials.project_id
   });
 } else {
   client = new textToSpeech.TextToSpeechClient();
@@ -60,17 +128,40 @@ app.post("/generate-audio", async (req, res) => {
       speakingRate = 0.85
     } = req.body;
 
+    logEvent("info", "tts:received", {
+      requestId: req.requestId,
+      place,
+      persona,
+      voice,
+      speakingRate,
+      scriptLength: typeof tts_script === "string" ? tts_script.length : null,
+      hasScript: Boolean(tts_script)
+    });
+
     if (!tts_script || typeof tts_script !== "string") {
+      logEvent("warn", "tts:validation_failed", {
+        requestId: req.requestId,
+        reason: "missing_or_invalid_tts_script"
+      });
+
       return res.status(400).json({
         success: false,
-        error: "tts_script is required"
+        error: "tts_script is required",
+        request_id: req.requestId
       });
     }
 
     if (tts_script.length > 2000) {
+      logEvent("warn", "tts:validation_failed", {
+        requestId: req.requestId,
+        reason: "tts_script_too_long",
+        scriptLength: tts_script.length
+      });
+
       return res.status(400).json({
         success: false,
-        error: "tts_script must be under 2000 characters"
+        error: "tts_script must be under 2000 characters",
+        request_id: req.requestId
       });
     }
 
@@ -79,15 +170,20 @@ app.post("/generate-audio", async (req, res) => {
       .update(tts_script + voice + speakingRate)
       .digest("hex");
 
-    const safePlace = String(place).replace(/[^a-zA-Z0-9가-힣]/g, "_");
-    const safePersona = String(persona).replace(/[^a-zA-Z0-9가-힣]/g, "_");
+    const safePlace = toSafeFilePart(place);
+    const safePersona = toSafeFilePart(persona);
 
     const fileName = `${safePlace}_${safePersona}_${hash}.mp3`;
     const filePath = path.join(audioDir, fileName);
-
     const audioUrl = `${getBaseUrl(req)}/audio/${encodeURIComponent(fileName)}`;
 
     if (fs.existsSync(filePath)) {
+      logEvent("info", "tts:cache_hit", {
+        requestId: req.requestId,
+        fileName,
+        audioUrl
+      });
+
       return res.json({
         success: true,
         cached: true,
@@ -96,7 +192,8 @@ app.post("/generate-audio", async (req, res) => {
         provider: "google-cloud-text-to-speech",
         voice,
         speakingRate,
-        pitch_applied: false
+        pitch_applied: false,
+        request_id: req.requestId
       });
     }
 
@@ -105,7 +202,12 @@ app.post("/generate-audio", async (req, res) => {
       speakingRate: Number(speakingRate)
     };
 
-    console.log("TTS request audioConfig:", audioConfig);
+    logEvent("info", "tts:synthesize_start", {
+      requestId: req.requestId,
+      fileName,
+      voice,
+      audioConfig
+    });
 
     const request = {
       input: {
@@ -120,8 +222,19 @@ app.post("/generate-audio", async (req, res) => {
 
     const [response] = await client.synthesizeSpeech(request);
 
+    logEvent("info", "tts:synthesize_success", {
+      requestId: req.requestId,
+      audioContentBytes: response.audioContent ? response.audioContent.length : 0
+    });
+
     ensureAudioDir();
     fs.writeFileSync(filePath, response.audioContent, "binary");
+
+    logEvent("info", "tts:file_written", {
+      requestId: req.requestId,
+      fileName,
+      audioUrl
+    });
 
     return res.json({
       success: true,
@@ -131,15 +244,21 @@ app.post("/generate-audio", async (req, res) => {
       provider: "google-cloud-text-to-speech",
       voice,
       speakingRate,
-      pitch_applied: false
+      pitch_applied: false,
+      request_id: req.requestId
     });
   } catch (error) {
-    console.error("TTS generation error:", error);
+    logEvent("error", "tts:generation_error", {
+      requestId: req.requestId,
+      message: error.message,
+      stack: error.stack
+    });
 
     return res.status(500).json({
       success: false,
       error: "Audio generation failed",
-      detail: error.message
+      detail: error.message,
+      request_id: req.requestId
     });
   }
 });
@@ -147,5 +266,8 @@ app.post("/generate-audio", async (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(`TTS server running on port ${PORT}`);
+  logEvent("info", "server:started", {
+    port: PORT,
+    nodeEnv: process.env.NODE_ENV || "development"
+  });
 });

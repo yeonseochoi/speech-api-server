@@ -123,7 +123,7 @@ app.post("/generate-audio", async (req, res) => {
     const {
       place = "tour",
       persona = "default",
-      tts_script,
+      tts_script = req.body.value,
       voice = "ko-KR-Chirp3-HD-Charon",
       speakingRate = 0.85
     } = req.body;
@@ -134,6 +134,8 @@ app.post("/generate-audio", async (req, res) => {
       persona,
       voice,
       speakingRate,
+      bodyKeys: Object.keys(req.body),
+      usedValueFallback: !req.body.tts_script && Boolean(req.body.value),
       scriptLength: typeof tts_script === "string" ? tts_script.length : null,
       hasScript: Boolean(tts_script)
     });

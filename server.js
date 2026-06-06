@@ -120,7 +120,7 @@ function getBaseUrl(req) {
 
 app.post("/generate-audio", async (req, res) => {
   try {
-    let { place, persona, tts_script, voice, speakingRate } = req.body;
+    let { place, persona, tts_script, voice, speakingRate, pitch } = req.body;
 
     if (req.body.value) {
       try {
@@ -130,6 +130,7 @@ app.post("/generate-audio", async (req, res) => {
         tts_script   = parsed.tts_script   || req.body.value;
         voice        = parsed.voice        || voice;
         speakingRate = parsed.speakingRate || speakingRate;
+        pitch        = parsed.pitch        !== undefined ? parsed.pitch : pitch;
       } catch (e) {
         tts_script = req.body.value;
       }
@@ -139,6 +140,7 @@ app.post("/generate-audio", async (req, res) => {
     persona      = persona      || "default";
     voice        = voice        || "ko-KR-Chirp3-HD-Charon";
     speakingRate = speakingRate || 0.85;
+    pitch        = pitch        !== undefined ? Number(pitch) : 0;
 
     logEvent("info", "tts:received", {
       requestId: req.requestId,
@@ -146,6 +148,7 @@ app.post("/generate-audio", async (req, res) => {
       persona,
       voice,
       speakingRate,
+      pitch,
       bodyKeys: Object.keys(req.body),
       usedValueFallback: !req.body.tts_script && Boolean(req.body.value),
       scriptLength: typeof tts_script === "string" ? tts_script.length : null,
@@ -181,7 +184,7 @@ app.post("/generate-audio", async (req, res) => {
 
     const hash = crypto
       .createHash("md5")
-      .update(tts_script + voice + speakingRate)
+      .update(tts_script + voice + speakingRate + pitch)
       .digest("hex");
 
     const safePlace = toSafeFilePart(place);
@@ -206,7 +209,8 @@ app.post("/generate-audio", async (req, res) => {
         provider: "google-cloud-text-to-speech",
         voice,
         speakingRate,
-        pitch_applied: false,
+        pitch_applied: !voice.includes("Chirp3") && pitch !== 0,
+        pitch: voice.includes("Chirp3") ? null : pitch,
         request_id: req.requestId
       });
     }
@@ -215,6 +219,10 @@ app.post("/generate-audio", async (req, res) => {
       audioEncoding: "MP3",
       speakingRate: Number(speakingRate)
     };
+    
+    if (!voice.includes("Chirp3")) {
+      audioConfig.pitch = Number(pitch);
+    }
 
     logEvent("info", "tts:synthesize_start", {
       requestId: req.requestId,
@@ -258,7 +266,8 @@ app.post("/generate-audio", async (req, res) => {
       provider: "google-cloud-text-to-speech",
       voice,
       speakingRate,
-      pitch_applied: false,
+      pitch_applied: !voice.includes("Chirp3") && pitch !== 0,
+      pitch: voice.includes("Chirp3") ? null : pitch,
       request_id: req.requestId
     });
   } catch (error) {
